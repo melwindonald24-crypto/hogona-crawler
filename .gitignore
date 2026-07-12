@@ -1,6 +1,13 @@
 # Dependencies
 node_modules/
 
+# Python virtual environments
+.venv/
+venv/
+env/
+crawlerService/.venv/
+*.egg-info/
+
 # Environment variables and local secrets
 .env
 .env.*

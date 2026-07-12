@@ -137,6 +137,11 @@ hogona-crawl/
       canidate_cluster.js       # Candidate duplicate-place cluster
       cluster_member.js         # Cluster membership join table
       dbindex.js                # Association definitions
+  crawlerService/
+    .venv/                      # Local Python virtual environment, ignored by Git
+    crawler_service/            # Python subprocess package
+    runCrawlerService.js        # Node wrapper for spawning the Python service
+    requirements.txt            # Python-only dependencies
   docs/
     images/
       database-schema.png       # Database diagram
@@ -202,6 +207,23 @@ The bootstrap script:
 3. Authenticates the connection.
 4. Synchronizes the Sequelize models with the database.
 5. Prints the registered models.
+
+## Python Crawler Service
+
+The `crawlerService/` folder is an isolated Python subprocess service. Its virtual environment lives at `crawlerService/.venv/` and is ignored by Git.
+
+Node can call it through `crawlerService/runCrawlerService.js`:
+
+```js
+import { runCrawlerService } from "./crawlerService/runCrawlerService.js";
+
+const result = await runCrawlerService({
+  source: "manual",
+  query: "tourist places in Kochi",
+});
+```
+
+The Python process accepts JSON through stdin and returns JSON through stdout, which keeps the Node/Python boundary simple.
 
 ## Current Implementation Notes
 

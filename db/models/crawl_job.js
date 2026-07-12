@@ -17,6 +17,11 @@ const crawl_job=sequelize.define("crawl_job",{
         defaultValue:'pending',
     
     },
+    config:{
+        type:DataTypes.JSONB,
+        allowNull:false,
+    }
+    
 },
     {
         tableName:'crawl_job',
