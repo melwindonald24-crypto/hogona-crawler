@@ -1,11 +1,15 @@
+import crypto from "node:crypto";
 import raw_evidence from "../db/models/raw_evidence.js";
 
 class rawEvidence{
 
     static async createRawEvidence({crawlJobId,discoveryJobId,sourceUrl,content}){
+        if (content === undefined || content === null) {
+            throw new TypeError("Raw evidence content is required.");
+        }
 
-        const normalizedContent= content==="string"?content:JSON.stringify(content);
-        const hash= crypto.createhash('sha256').update(normalizedContent).digest('hex');
+        const normalizedContent = typeof content === "string" ? content : JSON.stringify(content);
+        const hash = crypto.createHash('sha256').update(normalizedContent).digest('hex');
         const existingEvidence= await raw_evidence.findOne({
             where:{
                 content_hash:hash

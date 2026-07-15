@@ -1,4 +1,4 @@
-import crawl_job from "../db/models/crawl_job";
+import crawl_job from "../../db/models/crawl_job.js";
 
 class crawlJobService{
 

@@ -1,9 +1,9 @@
-import canidate_cluster from "./canidate_cluster";
-import cluster_member from "./cluster_member";
-import crawl_job from "./crawl_job";
-import discovery_job from "./discovery_job";
-import gemma_extraction from "./gemma_extraction";
-import raw_evidence from "./raw_evidence";
+import canidate_cluster from "./canidate_cluster.js";
+import cluster_member from "./cluster_member.js";
+import crawl_job from "./crawl_job.js";
+import discovery_job from "./discovery_job.js";
+import gemma_extraction from "./gemma_extraction.js";
+import raw_evidence from "./raw_evidence.js";
 
 //crawl_job 1:N raw_evidence
 crawl_job.hasMany(raw_evidence, { foreignKey: "crawl_job_id" });
@@ -26,13 +26,11 @@ cluster_member.belongsTo(canidate_cluster, { foreignKey: "cluster_id" });
 gemma_extraction.hasOne(cluster_member, { foreignKey: "gemma_extraction_id" });
 cluster_member.belongsTo(gemma_extraction, { foreignKey: "gemma_extraction_id" });
 
-raw_evidence
-
-gemma_extraction
-
-
-discovery_job
-cluster_member
-canidate_cluster
-
-crawl_job
+export {
+    canidate_cluster,
+    cluster_member,
+    crawl_job,
+    discovery_job,
+    gemma_extraction,
+    raw_evidence,
+};

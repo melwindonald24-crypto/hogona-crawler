@@ -50,27 +50,27 @@ const TRAVEL_SET = new Set(
 
 class CrawlPriority {
 
-    static  urlScore({url,text=""}) {
-        const priority=1;
-        const parsedUrl=new URL(url);
-        const URLTokens=new Set(TextNormalizer.normalize(parsedUrl.pathname));
-        const textTokens=new Set(TextNormalizer.normalize(text));
-        priority+=this.#calulate(
-            URLTokens,
+    static urlScore({ url, text = "" }) {
+        let priority = 1;
+        const parsedUrl = new URL(url);
+        const urlTokens = new Set(TextNormalizer.normalize(parsedUrl.pathname));
+        const textTokens = new Set(TextNormalizer.normalize(text));
+        priority += this.#calculate(
+            urlTokens,
             HIGH_VALUE_SET,
             2
         )
-        priority+=this.#calulate(
-            URLTokens,
+        priority += this.#calculate(
+            urlTokens,
             TRAVEL_SET,
             1
         )
-        priority+=this.#calulate(
+        priority += this.#calculate(
             textTokens,
             HIGH_VALUE_SET,
             3
         )
-        priority+=this.#calulate(
+        priority += this.#calculate(
             textTokens,
             TRAVEL_SET,
             1.5
@@ -78,7 +78,7 @@ class CrawlPriority {
         return priority;
 
     } 
-    static #calulate(tokens,keywordSet,weight)
+    static #calculate(tokens,keywordSet,weight)
     {
         let score=0;
         for(const token of tokens)

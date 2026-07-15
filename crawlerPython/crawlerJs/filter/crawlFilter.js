@@ -1,5 +1,5 @@
 
-const BLACKLIST_KEYWORDS=new set([
+const BLACKLIST_KEYWORDS = new Set([
     "about-us",
     "contact-us",
     "privacy-policy",
@@ -25,14 +25,20 @@ const BLACKLIST_KEYWORDS=new set([
 class CrawlFilter {
     static isBlacklisted(url) 
         {
-            const parsedURL=new URL(url);
-            const segments=parsedURL.pathname.split('/').filter(Boolean);
-            for(const segment in segments)
-            {
-                if(BLACKLIST_KEYWORDS.has(segment))
-                {
-                    return true;
+            try {
+                const parsedURL = new URL(url);
+                const segments = parsedURL.pathname
+                    .toLowerCase()
+                    .split('/')
+                    .filter(Boolean);
+
+                for (const segment of segments) {
+                    if (BLACKLIST_KEYWORDS.has(segment)) {
+                        return true;
+                    }
                 }
+            } catch {
+                return true;
             }
             return false;
         }

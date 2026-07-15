@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import json
+from urllib.parse import urlparse
 from crawl4ai import AsyncWebCrawler
 
 
@@ -19,7 +20,7 @@ async def crawl(url):
         }
 
         links = []
-        for link in result.links.get("internal", []):
+        for link in (result.links or {}).get("internal", []):
             links.append(
                 {
                     "url": link.get("href") or link.get("url"),
@@ -37,6 +38,10 @@ async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", required=True)
     args = parser.parse_args()
+
+    parsed_url = urlparse(args.url)
+    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+        parser.error("--url must be an absolute http or https URL")
 
     result = await crawl(args.url)
     print(json.dumps(result))

@@ -46,6 +46,16 @@ const raw_evidence = sequelize.define(
         createdAt:true,
         updatedAt:true,
         underscored:true,
+        validate: {
+            hasExactlyOneJob() {
+                const hasCrawlJob = Boolean(this.crawl_job_id);
+                const hasDiscoveryJob = Boolean(this.discovery_job_id);
+
+                if (hasCrawlJob === hasDiscoveryJob) {
+                    throw new Error('Raw evidence must belong to exactly one crawl job or discovery job.');
+                }
+            },
+        },
     }
 )
 export default raw_evidence;

@@ -32,15 +32,15 @@ const gemma_extraction = sequelize.define("gemma_extraction", {
     },
     extracted_data: {
         type:DataTypes.JSONB,
-        allowedNull:true,
+        allowNull:true,
     },
     confidence:{
         type:DataTypes.FLOAT,
-        allowedNull:false
+        allowNull:false
     },
     status:{
         type:DataTypes.ENUM("EXTRACTED","REVIEW"),
-        allowedNull:false,
+        allowNull:false,
         defaultValue:"EXTRACTED"
     }
 
