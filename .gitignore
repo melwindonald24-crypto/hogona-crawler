@@ -5,8 +5,13 @@ node_modules/
 .venv/
 venv/
 env/
-crawlerService/.venv/
+crawlerPython/.venv/
 *.egg-info/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # Environment variables and local secrets
 .env

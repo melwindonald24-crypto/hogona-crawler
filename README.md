@@ -1,179 +1,162 @@
 # Hogona Crawl
 
-Hogona Crawl is the data discovery layer for a trip planning application. Its job is to collect raw travel-related evidence from crawl sources and discovery sources, extract tourist-place candidates from that evidence, group duplicate mentions of the same place, and prepare the resulting place data for later enrichment and review.
+Hogona Crawl is the crawling and discovery backend for a trip planning app. It collects travel-related pages and API results, stores raw evidence, extracts possible tourist places, and prepares duplicate place mentions for later clustering, enrichment, and review.
 
-At the moment, this repository contains the Node.js/Sequelize database foundation for that pipeline: PostgreSQL connection setup, schema models, relationships, and a bootstrap script that authenticates and synchronizes the database.
+The project is mainly a Node.js app with Sequelize/PostgreSQL models. It also has an isolated Python crawler under `crawlerPython/` that uses Crawl4AI and is called from Node as a subprocess.
 
 ## Pipeline Overview
 
-The intended flow is:
-
-1. Collect URLs, OSM API results, or other travel-source documents.
-2. Store every raw document as `raw_evidence`.
-3. Run extraction over batches of raw evidence to identify possible tourist places.
-4. Store extracted place candidates in `gemma_extraction`.
-5. Send low-confidence or incomplete extraction results to review.
-6. Group duplicate place mentions into candidate clusters.
-7. Enrich and resolve each cluster into a final place record for the trip planning app.
+1. Create crawl jobs from source URLs or discovery results.
+2. Crawl pages with the Python Crawl4AI worker.
+3. Rank and filter discovered links in Node.
+4. Store crawled page content as `raw_evidence`.
+5. Run extraction to produce `gemma_extraction` tourist-place candidates.
+6. Group duplicates into `canidate_cluster` through `cluster_members`.
+7. Enrich and resolve final place records for the trip planning app.
 
 ![Tourist place discovery flow](docs/images/discovery-flow.png)
 
 ## Database Schema
 
-The current schema is centered around raw evidence, extracted place candidates, and duplicate grouping.
+The schema stores jobs, raw evidence, extraction results, and candidate duplicate-place clusters.
 
 ![Database schema](docs/images/database-schema.png)
-
-## Data Model
-
-### `crawl_job`
-
-Represents a crawler run that collects raw documents from a named source.
-
-Key fields:
-
-- `id`: UUID primary key
-- `source`: source name or source identifier
-- `status`: `pending`, `running`, `completed`, or `failed`
-- `created_at`, `updated_at`: managed by Sequelize
-
-Relationship:
-
-- One `crawl_job` can produce many `raw_evidence` rows.
-
-### `discovery_job`
-
-Represents a configurable discovery run. This is useful for source-specific searches, API pulls, OSM discovery passes, or future location/category based discovery.
-
-Key fields:
-
-- `id`: UUID primary key
-- `source`: source name or source identifier
-- `status`: `pending`, `running`, `completed`, or `failed`
-- `config`: JSONB configuration for the discovery pass
-- `created_at`, `updated_at`: managed by Sequelize
-
-Relationship:
-
-- One `discovery_job` can produce many `raw_evidence` rows.
-
-### `raw_evidence`
-
-Stores the raw text/document evidence collected by a crawl job or discovery job.
-
-Key fields:
-
-- `id`: UUID primary key
-- `crawl_job_id`: optional link to `crawl_job`
-- `discovery_job_id`: optional link to `discovery_job`
-- `source_url`: original URL or source location
-- `content`: raw document text
-- `content_hash`: unique hash used to deduplicate repeated crawls
-- `created_at`, `updated_at`: managed by Sequelize
-
-Relationship:
-
-- One `raw_evidence` row can produce many `gemma_extraction` rows.
-
-### `gemma_extraction`
-
-Stores extracted tourist-place candidates from raw evidence.
-
-Key fields:
-
-- `id`: UUID primary key
-- `raw_evidence_id`: source evidence row
-- `name`: extracted place name
-- `category`: array of place categories
-- `co_ordinates`: PostGIS point in SRID `4326`
-- `extracted_data`: JSONB payload for structured extraction details
-- `confidence`: extraction confidence score
-- `status`: `EXTRACTED` or `REVIEW`
-- `created_at`: managed by Sequelize
-
-Relationship:
-
-- One `gemma_extraction` belongs to one `raw_evidence` row.
-- One `gemma_extraction` can be assigned to one `cluster_member` row.
-
-### `canidate_cluster`
-
-Groups duplicate or near-duplicate extracted places that likely refer to the same real-world tourist place.
-
-Key fields:
-
-- `id`: UUID primary key
-- `proposed_name`: proposed canonical place name for the cluster
-- `status`: `PENDING`, `READY`, or `COMPLETED`
-- `created_at`, `updated_at`: managed by Sequelize
-
-Relationship:
-
-- One `canidate_cluster` can contain many `cluster_member` rows.
-
-Note: the current model and table name use `canidate_cluster`. If this is meant to be `candidate_cluster`, rename it carefully with a migration before production use.
-
-### `cluster_members`
-
-Join table connecting extracted place candidates to a candidate cluster.
-
-Key fields:
-
-- `gemma_extraction_id`: primary key and foreign key to `gemma_extraction`
-- `cluster_id`: foreign key to `canidate_cluster`
-- `match_score`: score describing how strongly the extraction matches the cluster
 
 ## Project Structure
 
 ```text
 hogona-crawl/
   db/
-    database.js                 # Sequelize/PostgreSQL connection
+    database.js
     models/
-      crawl_job.js              # Crawl job model
-      discovery_job.js          # Discovery job model
-      raw_evidence.js           # Raw collected evidence
-      gemma_extraction.js       # Extracted tourist-place candidates
-      canidate_cluster.js       # Candidate duplicate-place cluster
-      cluster_member.js         # Cluster membership join table
-      dbindex.js                # Association definitions
-  crawlerService/
-    .venv/                      # Local Python virtual environment, ignored by Git
-    crawler_service/            # Python subprocess package
-    runCrawlerService.js        # Node wrapper for spawning the Python service
-    requirements.txt            # Python-only dependencies
-  docs/
-    images/
-      database-schema.png       # Database diagram
-      discovery-flow.png        # Discovery pipeline diagram
-  index.js                      # Database bootstrap/sync script
+      crawl_job.js
+      discovery_job.js
+      raw_evidence.js
+      gemma_extraction.js
+      canidate_cluster.js
+      cluster_member.js
+      dbindex.js
+  discovery/
+    DiscoveryJobService.js
+    RawEvidenceservice.js
+    processingServices.js/
+      wikipediaService.js
+      geoApifyService.js
+  crawlerPython/
+    .venv/                         # Python virtual environment, ignored by Git
+    requirements.txt               # Python crawler dependencies
+    src/
+      crawlerProcessing.py         # Crawl4AI script
+    crawlerJs/
+      crawlerService.js            # Crawl job DB service
+      processing/
+        runCrawlerService.js       # Node wrapper around Python subprocess
+      filter/
+        crawlFilter.js             # Link blacklist filter
+      ranker/
+        crawlPriority.js           # Link scoring
+        textNormalizer.js          # Text token/stem helper
+  docs/images/
+    database-schema.png
+    discovery-flow.png
+  index.js                         # Database bootstrap/sync script
   package.json
 ```
 
+## Main Components
+
+### Node Database Layer
+
+`db/database.js` creates the Sequelize connection using either `DATABASE_URL` or separate database variables. `index.js` imports the models, authenticates with PostgreSQL, and runs `sequelize.sync()`.
+
+The current tables are:
+
+- `crawl_job`: crawl queue entries with `source_url`, `status`, and `priority`.
+- `discovery_job`: configurable discovery jobs with `source`, `status`, and JSONB `config`.
+- `raw_evidence`: deduplicated raw crawled/discovered content, keyed by `content_hash`.
+- `gemma_extraction`: extracted tourist-place candidates with name, category, coordinates, JSONB details, confidence, and review status.
+- `canidate_cluster`: candidate duplicate-place groups.
+- `cluster_members`: join table connecting extractions to clusters with `match_score`.
+
+### Discovery Services
+
+`discovery/processingServices.js/wikipediaService.js` fetches Wikipedia documents for a configured query.
+
+`discovery/processingServices.js/geoApifyService.js` fetches Geoapify places for configured `placeId` and `categories`.
+
+`discovery/RawEvidenceservice.js` is intended to normalize content, hash it, avoid duplicates, and write `raw_evidence`.
+
+### Python Crawler
+
+`crawlerPython/src/crawlerProcessing.py` runs Crawl4AI:
+
+```powershell
+.\crawlerPython\.venv\Scripts\python.exe .\crawlerPython\src\crawlerProcessing.py --url https://example.com
+```
+
+It returns JSON shaped like:
+
+```json
+{
+  "documents": [
+    {
+      "sourceUrl": "https://example.com",
+      "content": "..."
+    }
+  ],
+  "links": []
+}
+```
+
+### Node To Python Subprocess
+
+`crawlerPython/crawlerJs/processing/runCrawlerService.js` uses `python-shell` to execute the Python crawler with the virtualenv Python executable:
+
+```js
+import CrawlService from "./crawlerPython/crawlerJs/processing/runCrawlerService.js";
+
+const result = await CrawlService.crawl("https://example.com");
+```
+
+The virtual environment stays in `crawlerPython/.venv/` and should not be committed.
+
+### Crawl Filtering And Ranking
+
+`crawlerPython/crawlerJs/filter/crawlFilter.js` is intended to reject low-value URLs such as login, privacy, terms, contact, and support pages.
+
+`crawlerPython/crawlerJs/ranker/crawlPriority.js` scores discovered links using travel and high-value tourist-place keywords such as `waterfalls`, `trek`, `beach`, `temple`, `monument`, `hidden`, and `viewpoint`.
+
 ## Requirements
 
-- Node.js
-- npm
+- Node.js and npm
+- Python 3.13 for the current crawler venv
 - PostgreSQL
-- PostGIS extension enabled for geometry support
+- PostGIS enabled in the target database
 
-The code uses:
+Node dependencies include:
 
-- `sequelize` for ORM models
-- `pg` and `pg-hstore` for PostgreSQL access
-- `dotenv` for local environment variables
+- `sequelize`
+- `pg`
+- `pg-hstore`
+- `dotenv`
+- `axios`
+- `python-shell`
+
+Python dependencies are listed in `crawlerPython/requirements.txt` and currently include:
+
+- `crawl4ai`
 
 ## Environment Variables
 
-Create a local `.env` file in the project root. The `.env` file is intentionally ignored by Git.
+Create a local `.env` file in the project root. It is ignored by Git.
 
-Use either a single database URL:
+Use either:
 
 ```env
 DATABASE_URL=postgres://user:password@localhost:5432/hogona_crawl
 ```
 
-Or separate database settings:
+Or:
 
 ```env
 DB_NAME=hogona_crawl
@@ -182,57 +165,65 @@ DB_PASSWORD=your_password
 DB_HOST=localhost
 ```
 
-Because `gemma_extraction.co_ordinates` uses `GEOMETRY("POINT", 4326)`, the target database should have PostGIS enabled:
+Geoapify discovery also expects:
+
+```env
+GEOMAPIFY_API_KEY=your_geoapify_key
+```
+
+Because `gemma_extraction.co_ordinates` uses `GEOMETRY("POINT", 4326)`, enable PostGIS:
 
 ```sql
 CREATE EXTENSION IF NOT EXISTS postgis;
 ```
 
-## Installation
+## Setup
+
+Install Node dependencies:
 
 ```bash
 npm install
 ```
 
+Create and prepare the Python crawler environment:
+
+```powershell
+py -3.13 -m venv .\crawlerPython\.venv
+.\crawlerPython\.venv\Scripts\python.exe -m pip install -r .\crawlerPython\requirements.txt
+.\crawlerPython\.venv\Scripts\crawl4ai-setup.exe
+```
+
+Use `python -m pip` through the venv executable instead of plain `pip`, so installs stay inside `crawlerPython/.venv`.
+
 ## Run
+
+Sync the database schema:
 
 ```bash
 node index.js
 ```
 
-The bootstrap script:
+Run a crawler smoke test:
 
-1. Loads environment variables from `.env`.
-2. Connects to PostgreSQL.
-3. Authenticates the connection.
-4. Synchronizes the Sequelize models with the database.
-5. Prints the registered models.
-
-## Python Crawler Service
-
-The `crawlerService/` folder is an isolated Python subprocess service. Its virtual environment lives at `crawlerService/.venv/` and is ignored by Git.
-
-Node can call it through `crawlerService/runCrawlerService.js`:
-
-```js
-import { runCrawlerService } from "./crawlerService/runCrawlerService.js";
-
-const result = await runCrawlerService({
-  source: "manual",
-  query: "tourist places in Kochi",
-});
+```powershell
+.\crawlerPython\.venv\Scripts\python.exe .\crawlerPython\src\crawlerProcessing.py --url https://example.com
 ```
 
-The Python process accepts JSON through stdin and returns JSON through stdout, which keeps the Node/Python boundary simple.
+## Documentation And Ignore Files
+
+There is one project README: `README.md`.
+
+There is one project `.gitignore`: `.gitignore`.
+
+You may also see `crawlerPython/.venv/.gitignore`; that file is generated by Python inside the virtual environment. It is not project documentation, and the whole `.venv/` folder is ignored by the root `.gitignore`.
 
 ## Current Implementation Notes
 
-- `index.js` currently imports the model files directly and runs `sequelize.sync()`.
-- `db/models/dbindex.js` defines associations between models, but it is not currently imported by `index.js`.
-- Since this project uses ESM with `"type": "module"`, imports in `db/models/dbindex.js` should include `.js` extensions before that file is used directly.
-- `gemma_extraction.js` uses `allowedNull` in two fields; Sequelize expects `allowNull`.
-- The repository currently defines the persistence layer. Crawler workers, extraction workers, clustering workers, enrichment, and final place-table writing are represented in the flow diagram but are not implemented in this codebase yet.
-
-## Git Hygiene
-
-The project `.gitignore` excludes local secrets, dependencies, logs, cache/build output, local database files, and editor/OS noise. Keep `package.json`, `package-lock.json`, source files, and documentation committed.
+- `db/models/dbindex.js` defines associations, but `index.js` currently imports model files directly instead of importing `dbindex.js`.
+- `db/models/dbindex.js` uses extensionless imports; with `"type": "module"`, those imports should include `.js` before the file is used.
+- `gemma_extraction.js` uses `allowedNull`; Sequelize expects `allowNull`.
+- `RawEvidenceservice.js` references `crypto` but does not import it, and its string check should compare `typeof content`.
+- `geoApifyService.js` assigns `LIMIT=100` without declaring it.
+- `crawlFilter.js` uses `new set`; JavaScript expects `new Set`.
+- `textNormalizer.js` currently has a malformed class method layout, but it is clearly intended to expose a `normalize(text)` helper.
+- `crawlerPython/crawlerJs/crawlerService.js` imports `../db/models/crawl_job`, but from its current folder that path does not point to the root `db/` directory.

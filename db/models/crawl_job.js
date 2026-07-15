@@ -7,7 +7,7 @@ const crawl_job=sequelize.define("crawl_job",{
         defaultValue:DataTypes.UUIDV4,
         primaryKey:true
     },
-    source:{
+    source_url:{
         type:DataTypes.STRING,
         allowNull:false
     },
@@ -17,9 +17,9 @@ const crawl_job=sequelize.define("crawl_job",{
         defaultValue:'pending',
     
     },
-    config:{
-        type:DataTypes.JSONB,
-        allowNull:false,
+    priority:{
+        type:DataTypes.FLOAT,
+        allowNull:true,
     }
     
 },

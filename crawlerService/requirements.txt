@@ -1,2 +1,0 @@
-# Add crawler-specific Python dependencies here.
-# This file intentionally starts empty so the service has no global Python dependency.
