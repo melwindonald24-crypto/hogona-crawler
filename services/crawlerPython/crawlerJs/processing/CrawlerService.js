@@ -12,7 +12,7 @@ const pythonExecutable = process.platform === "win32"
 
 const scriptFile = path.join(crawlerRoot, "src", "crawlerProcessing.py");
 
-class CrawlService{
+class CrawlerService{
   static async crawl(url)
   {
     try{
@@ -37,5 +37,5 @@ class CrawlService{
     
   }
 }
-export default CrawlService
+export default CrawlerService
 

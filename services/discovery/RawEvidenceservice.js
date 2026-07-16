@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
-import raw_evidence from "../db/models/raw_evidence.js";
+import raw_evidence from "../../db/models/raw_evidence.js";
 
-class rawEvidence{
+class rawEvidenceService{
 
     static async createRawEvidence({crawlJobId,discoveryJobId,sourceUrl,content}){
         if (content === undefined || content === null) {
@@ -29,4 +29,4 @@ class rawEvidence{
         });
     }
 }
-export default rawEvidence;
+export default rawEvidenceService;

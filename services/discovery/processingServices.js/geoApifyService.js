@@ -25,7 +25,13 @@
         }
         try{
             const response=await axios.get(URL,{params})
-            return response.data.features ?? [];
+
+            if(response.status!==200)
+            {
+                throw new Error(`geoapify returned http ${response.status}`)
+            }
+
+            return {content:response.data.features ?? []};
             
         } catch (error) {
             console.error("Error fetching documents from Geoapify:", error);

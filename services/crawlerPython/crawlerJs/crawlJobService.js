@@ -1,4 +1,4 @@
-import crawl_job from "../../db/models/crawl_job.js";
+import crawl_job from "../../../db/models/crawl_job.js";
 
 class crawlJobService{
 
@@ -23,10 +23,10 @@ class crawlJobService{
         })
         return result;
     }
-    static async updateStatus({crawlJob,status})
+    static async updateStatus({Job,status})
     {
-        crawlJob.status=status;
-        return await crawlJob.save();
+        Job.status=status;
+        return await Job.save();
     }    
 }
 

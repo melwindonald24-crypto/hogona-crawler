@@ -14,10 +14,8 @@ async def crawl(url):
         markdown = result.markdown
         content = getattr(markdown, "raw_markdown", markdown)
 
-        document = {
-            "sourceUrl": url,
-            "content": content,
-        }
+        document = content
+        
 
         links = []
         for link in (result.links or {}).get("internal", []):
@@ -29,7 +27,7 @@ async def crawl(url):
             )
 
         return {
-            "documents": [document],
+            "documents": document,
             "links": links,
         }
 

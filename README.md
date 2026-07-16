@@ -48,11 +48,11 @@ Windows PowerShell.
 
 ```powershell
 npm.cmd install
-py -3.13 -m venv .\crawlerPython\.venv
-.\crawlerPython\.venv\Scripts\python.exe -m pip install -r .\crawlerPython\requirements.txt
-.\crawlerPython\.venv\Scripts\crawl4ai-setup.exe
+py -3.13 -m venv .\services\crawlerPython\.venv
+.\services\crawlerPython\.venv\Scripts\python.exe -m pip install -r .\services\crawlerPython\requirements.txt
+.\services\crawlerPython\.venv\Scripts\crawl4ai-setup.exe
 node index.js
-.\crawlerPython\.venv\Scripts\python.exe .\crawlerPython\src\crawlerProcessing.py --url https://example.com
+.\services\crawlerPython\.venv\Scripts\python.exe .\services\crawlerPython\src\crawlerProcessing.py --url https://example.com
 ```
 
 Before running `node index.js`, configure the database variables described in
@@ -66,10 +66,10 @@ collection to final place records.
 ![Discovery workflow](docs/images/discovery-flow.png)
 
 The current repository implements the acquisition and persistence foundation:
-job models, provider adapters, a Crawl4AI worker, evidence storage, link
-filtering, and link ranking. The extraction, clustering, and enrichment tables
-are present in the data model, but their worker/orchestration implementations
-are not part of this repository yet.
+job models, finite batchers, provider adapters, a Crawl4AI worker, evidence
+storage, link filtering, and link ranking. The extraction, clustering, and
+enrichment tables are present in the data model, but their worker
+implementations are not part of this repository yet.
 
 ![Database schema](docs/images/database-schema.png)
 
@@ -82,18 +82,18 @@ rules from leaking into one another.
 | Area | Owns | Does not own | Why this boundary exists |
 | --- | --- | --- | --- |
 | `db/models/` | Sequelize schema, relations, and model-level data validation | HTTP requests, browser execution, queue processing | Database rules remain reusable regardless of how a job was started. |
-| `discovery/processingServices.js/` | Provider-specific request parameters and responses | Crawling, persistence, ranking, extraction | Wikipedia and Geoapify can change independently without affecting the crawler. |
-| `discovery/RawEvidenceservice.js` | Content serialization, SHA-256 hashing, deduplication, and evidence creation | Choosing URLs or interpreting tourism data | Evidence is a durable audit record, not a crawl controller. |
-| `crawlerPython/src/crawlerProcessing.py` | Browser-backed page retrieval and JSON output | Node.js database access and job status changes | Crawl4AI stays in the Python runtime it needs, while the database remains owned by Node.js. |
-| `crawlerPython/crawlerJs/processing/` | Starting the Python worker and parsing its result | Browser logic or content extraction | Node.js gets a stable JavaScript interface without reimplementing the crawler. |
-| `crawlerPython/crawlerJs/filter/` and `ranker/` | Link rejection and priority scoring | Fetching links or changing job state | Link-selection rules can evolve without changing the crawler transport. |
+| `services/discovery/processingServices.js/` | Provider-specific request parameters and responses | Crawling, persistence, ranking, extraction | Wikipedia and Geoapify can change independently without affecting the crawler. |
+| `services/discovery/RawEvidenceservice.js` | Content serialization, SHA-256 hashing, deduplication, and evidence creation | Choosing URLs or interpreting tourism data | Evidence is a durable audit record, not a crawl controller. |
+| `services/crawlerPython/src/crawlerProcessing.py` | Browser-backed page retrieval and JSON output | Node.js database access and job status changes | Crawl4AI stays in the Python runtime it needs, while the database remains owned by Node.js. |
+| `services/crawlerPython/crawlerJs/processing/` | Starting the Python worker and parsing its result | Browser logic or content extraction | Node.js gets a stable JavaScript interface without reimplementing the crawler. |
+| `services/crawlerPython/crawlerJs/filter/` and `ranker/` | Link rejection and priority scoring | Fetching links or changing job state | Link-selection rules can evolve without changing the crawler transport. |
 
 ### Why Node.js and Python are separate
 
 Node.js already owns this project's Sequelize models, PostgreSQL connection,
 job records, and provider clients. Crawl4AI is a Python browser-crawling
 library, so the crawler runs in a small Python environment under
-`crawlerPython/.venv/`. Node.js invokes it as a subprocess and receives JSON on
+`services/crawlerPython/.venv/`. Node.js invokes it as a subprocess and receives JSON on
 standard output.
 
 This avoids duplicating database code in Python and avoids making the Node.js
@@ -127,7 +127,7 @@ application.
 2. `CrawlJobService.getPendingCrawlJobs()` selects pending jobs ordered by
    priority.
 3. `CrawlService.crawl(url)` launches `crawlerProcessing.py` using the Python
-   executable inside `crawlerPython/.venv/`.
+   executable inside `services/crawlerPython/.venv/`.
 4. Crawl4AI returns one document containing the page's Markdown content and a
    list of internal links.
 5. `CrawlFilter` rejects utility pages such as privacy, terms, login, and
@@ -159,10 +159,10 @@ pending -> running -> completed
                    -> failed
 ```
 
-The services provide create, fetch, and update primitives. A continuously
-running worker that claims jobs, retries failures, and performs these
-transitions end-to-end is an application-level composition step; it is not
-implemented as a standalone process in this repository.
+`index.js` starts both batchers after database synchronization. Each batcher
+drains pending jobs in bounded parallel batches, marks each job `running`, and
+records `completed` or `failed` after its processor returns. Retry policy and
+database-level job claiming are still application concerns.
 
 ## Configuration
 
@@ -226,14 +226,14 @@ the `npm.ps1` shim through execution policy. On systems without that policy,
 ### Python crawler environment
 
 ```powershell
-py -3.13 -m venv .\crawlerPython\.venv
-.\crawlerPython\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\crawlerPython\.venv\Scripts\python.exe -m pip install -r .\crawlerPython\requirements.txt
-.\crawlerPython\.venv\Scripts\crawl4ai-setup.exe
+py -3.13 -m venv .\services\crawlerPython\.venv
+.\services\crawlerPython\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\services\crawlerPython\.venv\Scripts\python.exe -m pip install -r .\services\crawlerPython\requirements.txt
+.\services\crawlerPython\.venv\Scripts\crawl4ai-setup.exe
 ```
 
 `crawl4ai-setup.exe` downloads the browser runtime used by Crawl4AI. The
-virtual environment belongs only to `crawlerPython/`; it does not turn the
+virtual environment belongs only to `services/crawlerPython/`; it does not turn the
 Node.js project into a Python project and it is ignored by Git.
 
 ### Initialize the database
@@ -252,19 +252,14 @@ project is connected to a shared database.
 The Python worker can be called directly for debugging:
 
 ```powershell
-.\crawlerPython\.venv\Scripts\python.exe .\crawlerPython\src\crawlerProcessing.py --url https://example.com
+.\services\crawlerPython\.venv\Scripts\python.exe .\services\crawlerPython\src\crawlerProcessing.py --url https://example.com
 ```
 
 It writes a single JSON object to standard output:
 
 ```json
 {
-  "documents": [
-    {
-      "sourceUrl": "https://example.com",
-      "content": "# Example Domain\\n..."
-    }
-  ],
+  "documents": "# Example Domain\\n...",
   "links": [
     {
       "url": "https://example.com/another-page",
@@ -278,10 +273,10 @@ Application code should use the Node.js wrapper instead of spawning Python
 itself:
 
 ```js
-import CrawlService from "./crawlerPython/crawlerJs/processing/runCrawlerService.js";
+import CrawlService from "./services/crawlerPython/crawlerJs/processing/CrawlerService.js";
 
 const result = await CrawlService.crawl("https://example.com");
-console.log(result.documents[0].content);
+console.log(result.documents);
 ```
 
 The worker accepts only absolute `http` or `https` URLs. Invalid URLs are
@@ -289,35 +284,33 @@ rejected before the browser starts.
 
 ### Composing a crawl and evidence write
 
-There is deliberately no hidden background worker in this repository. The
-application that owns scheduling composes the small services explicitly:
+The batchers compose these services when `index.js` runs. The following is the
+equivalent manual composition, useful when integrating the pipeline into a
+different application entry point:
 
 ```js
-import CrawlJobService from "./crawlerPython/crawlerJs/crawlerService.js";
-import CrawlService from "./crawlerPython/crawlerJs/processing/runCrawlerService.js";
-import RawEvidenceService from "./discovery/RawEvidenceservice.js";
+import CrawlJobService from "./services/crawlerPython/crawlerJs/crawlJobService.js";
+import CrawlService from "./services/crawlerPython/crawlerJs/processing/CrawlerService.js";
+import RawEvidenceService from "./services/discovery/RawEvidenceservice.js";
 
 const crawlJob = await CrawlJobService.createCrawlJob({
   sourceUrl: "https://example.com",
   priority: 10,
 });
 
-await CrawlJobService.updateStatus({ crawlJob, status: "running" });
+await CrawlJobService.updateStatus({ Job: crawlJob, status: "running" });
 
 try {
   const { documents } = await CrawlService.crawl(crawlJob.source_url);
+  await RawEvidenceService.createRawEvidence({
+    crawlJobId: crawlJob.id,
+    sourceUrl: crawlJob.source_url,
+    content: documents,
+  });
 
-  for (const document of documents) {
-    await RawEvidenceService.createRawEvidence({
-      crawlJobId: crawlJob.id,
-      sourceUrl: document.sourceUrl,
-      content: document.content,
-    });
-  }
-
-  await CrawlJobService.updateStatus({ crawlJob, status: "completed" });
+  await CrawlJobService.updateStatus({ Job: crawlJob, status: "completed" });
 } catch (error) {
-  await CrawlJobService.updateStatus({ crawlJob, status: "failed" });
+  await CrawlJobService.updateStatus({ Job: crawlJob, status: "failed" });
   throw error;
 }
 ```
@@ -388,21 +381,22 @@ hogona-crawl/
 ├── db/
 │   ├── database.js                         PostgreSQL connection setup
 │   └── models/                             schema definitions and relations
-├── discovery/
-│   ├── DiscoveryJobService.js              discovery-job persistence service
-│   ├── RawEvidenceservice.js               hash, deduplicate, and store evidence
-│   └── processingServices.js/
-│       ├── wikipediaService.js              Wikipedia adapter
-│       └── geoApifyService.js               Geoapify adapter
-├── crawlerPython/
-│   ├── .venv/                              local Python environment, ignored
-│   ├── requirements.txt                    Crawl4AI dependency list
-│   ├── src/crawlerProcessing.py            browser crawler and JSON CLI
-│   └── crawlerJs/
-│       ├── crawlerService.js               crawl-job persistence service
-│       ├── processing/runCrawlerService.js Node-to-Python subprocess wrapper
-│       ├── filter/crawlFilter.js           low-value URL filter
-│       └── ranker/                         text normalization and URL scoring
+├── services/
+│   ├── discovery/
+│   │   ├── DiscoveryJobService.js           discovery-job persistence service
+│   │   ├── RawEvidenceservice.js            hash, deduplicate, and store evidence
+│   │   └── processingServices.js/
+│   │       ├── wikipediaService.js          Wikipedia adapter
+│   │       └── geoApifyService.js           Geoapify adapter
+│   └── crawlerPython/
+│       ├── .venv/                           local Python environment, ignored
+│       ├── requirements.txt                 Crawl4AI dependency list
+│       ├── src/crawlerProcessing.py         browser crawler and JSON CLI
+│       └── crawlerJs/
+│           ├── crawlJobService.js           crawl-job persistence service
+│           ├── processing/CrawlerService.js Node-to-Python subprocess wrapper
+│           ├── filter/crawlFilter.js        low-value URL filter
+│           └── ranker/                      text normalization and URL scoring
 ├── docs/images/                            pipeline and schema diagrams
 ├── test/                                   Node.js utility tests
 └── index.js                                database bootstrap entry point
