@@ -1,22 +1,13 @@
-import dotenv from 'dotenv';
-dotenv.config();
-import { Sequelize } from 'sequelize';
+import "dotenv/config";
+import { Sequelize } from "sequelize";
 
+const DATABASE_URL = process.env.DATABASE_URL;
+if (!DATABASE_URL) {
+    throw new Error("DATABASE_URL is required. Add it to .env before running any script.");
+}
 
-const sequelize = !process.env.DATABASE_URL
-    ? new Sequelize(
-            process.env.DB_NAME,
-            process.env.DB_USER,
-            process.env.DB_PASSWORD,
-            {
-                host: process.env.DB_HOST,
-                dialect: 'postgres',
-                logging: false,
-            }
-        )
-    : new Sequelize(process.env.DATABASE_URL, {
-            dialect: 'postgres',
-            logging: false,
-        });
+const sequelize = new Sequelize(DATABASE_URL, {
+    logging: false,
+});
 
 export default sequelize;

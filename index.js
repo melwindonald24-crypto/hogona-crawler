@@ -1,28 +1,10 @@
-import crawlBatch from "./batcher/crawlJobBatcher.js";
-import discoveryBatch from "./batcher/discoverJobBatcher.js";
-import sequelize from "./db/database.js";
-import "./db/models/dbindex.js";
+console.log(`Hogona discovery and enrichment pipeline
 
-async function executeBatches() {
-    const summaries = await Promise.all([
-        crawlBatch.start(10),
-        discoveryBatch.start(10),
-    ]);
+Run one explicit stage at a time:
+  npm run discover            Collect Serper Places evidence for Karnataka.
+  npm run queue               Create deduplicated manual-enrichment jobs.
+  npm run export -- 3         Write a ChatGPT-ready batch of up to 10 jobs.
+  npm run import -- <file>    Import a source-backed ChatGPT JSON result.
+  npm test                    Run the unit tests.
 
-    }
-
-
-async function main() {
-    try {
-        await sequelize.authenticate();
-        console.log("Connection has been established successfully.");
-        await sequelize.sync();
-        console.log("Database synchronized successfully.");
-        await executeBatches();
-    } catch (error) {
-        console.error("Pipeline execution failed:", error);
-        process.exitCode = 1;
-    }
-}
-
-main();
+See README.md for the full workflow.`);

@@ -1,407 +1,227 @@
-# Hogona Crawl
+# Hogona — discovery & manual enrichment pipeline
 
-Hogona Crawl is the source-acquisition layer for a trip-planning product. Its
-job is to turn unstructured travel information into traceable, deduplicated
-evidence that can later be extracted into place candidates, reviewed, grouped,
-and enriched.
+A focused data-discovery pipeline that collects place search results from Serper Places, stores immutable provider responses in PostgreSQL, and produces small manual-enrichment packets for human+LLM review. It's intended for data engineers and researchers who need verified, auditable place enrichment workflows.
 
-The project does not try to decide which places belong in an itinerary. It
-solves the earlier problem: finding plausible sources, collecting their content,
-and preserving enough provenance to explain where every candidate came from.
+**Status:** Active · **License:** MIT
 
-## Contents
+---
 
-- [What the system does](#what-the-system-does)
-- [Quick start](#quick-start)
-- [Architecture](#architecture)
-- [Responsibilities and boundaries](#responsibilities-and-boundaries)
-- [Data model and invariants](#data-model-and-invariants)
-- [How work moves through the system](#how-work-moves-through-the-system)
-- [Configuration](#configuration)
-- [Installation](#installation)
-- [Using the crawler from Node.js](#using-the-crawler-from-nodejs)
-- [Provider discovery](#provider-discovery)
-- [Testing](#testing)
-- [Operational notes](#operational-notes)
-- [Repository layout](#repository-layout)
+**At a glance**
+- **Project Type:** CLI / Data pipeline
+- **Primary Users:** Data engineers, researchers, manual enrichment operators
+- **Backend:** Node.js (ESM) + Sequelize
+- **Database:** PostgreSQL
+- **External APIs:** Serper Places
 
-## What the system does
+---
 
-Hogona Crawl has two entry paths:
+## Overview
+Hogona avoids open web scraping and instead uses a small-number-of-sources approach: Serper Places is the single discovery adapter. Results are recorded verbatim as `raw_evidence` and later hand-edited or human-validated via `enrichment_job` packets. The pipeline emphasizes auditability, idempotence, and safe imports.
 
-1. **Crawling** starts from a URL in a `crawl_job`. Crawl4AI fetches the page,
-   returns the page content and internal links, and Node.js can persist the page
-   as raw evidence.
-2. **Discovery** starts from a configured source in a `discovery_job`.
-   Wikipedia and Geoapify adapters retrieve source material that can be stored
-   as raw evidence without first forcing it into a final place schema.
+## Goals
+- **Collect** reproducible provider payloads from Serper Places.
+- **Persist** immutable evidence for audit and re-parsing.
+- **Queue** unique candidate places for manual/LLM enrichment.
+- **Validate** and import only schema-safe, citation-backed enrichment results.
 
-Both paths converge at `raw_evidence`. That table is the provenance boundary:
-the original content is retained, deduplicated by hash, and linked to exactly
-one initiating job. Later stages create `gemma_extraction` records and group
-possible duplicates into candidate clusters.
+### Non-Goals
+- Automatic population of production place records (human review is required).
+- Arbitrary website scraping or automated text‐generation without citations.
 
-## Quick start
+---
 
-The commands below prepare the database schema and run one real crawl on
-Windows PowerShell.
+## Key Features
+- **Resumable discovery jobs:** `discovery_job` records allow safe retries.
+- **Immutable evidence:** `raw_evidence` stores provider JSON (JSONB).
+- **Deduplicated enrichment queue:** stable `sourcePlaceId` prevents duplicates.
+- **Small export batches** (1–10) for human + LLM processing.
 
-```powershell
-npm.cmd install
-py -3.13 -m venv .\services\crawlerPython\.venv
-.\services\crawlerPython\.venv\Scripts\python.exe -m pip install -r .\services\crawlerPython\requirements.txt
-.\services\crawlerPython\.venv\Scripts\crawl4ai-setup.exe
-node index.js
-.\services\crawlerPython\.venv\Scripts\python.exe .\services\crawlerPython\src\crawlerProcessing.py --url https://example.com
+---
+
+## Quick User Flow
+
+1. Run discovery to collect Serper Places evidence.
+2. Convert discoveries into deduplicated enrichment jobs.
+3. Export a small batch for manual/LLM enrichment.
+4. Import validated JSON results and mark them for review.
+
+Use the helpful entrypoint in [index.js](index.js) for command guidance.
+
+---
+
+## Architecture (high level)
+
+User → CLI scripts → Backend services → PostgreSQL
+
+- Discovery adapter: [services/discovery/serperPlacesService.js](services/discovery/serperPlacesService.js)
+- Raw evidence writer: [services/discovery/RawEvidenceservice.js](services/discovery/RawEvidenceservice.js)
+- Job & model definitions: [db/models/](db/models/)
+
+---
+
+## Important Files
+- **Entry point:** [index.js](index.js)
+- **Scripts:** [scripts/collectSerperKarnataka.js](scripts/collectSerperKarnataka.js), [scripts/queueSerperPlacesForManualEnrichment.js](scripts/queueSerperPlacesForManualEnrichment.js), [scripts/exportManualEnrichmentBatch.js](scripts/exportManualEnrichmentBatch.js), [scripts/importManualEnrichmentResults.js](scripts/importManualEnrichmentResults.js)
+- **Discovery adapter:** [services/discovery/serperPlacesService.js](services/discovery/serperPlacesService.js)
+- **Raw evidence writer:** [services/discovery/RawEvidenceservice.js](services/discovery/RawEvidenceservice.js)
+- **Models:** [db/models/discovery_job.js](db/models/discovery_job.js), [db/models/raw_evidence.js](db/models/raw_evidence.js), [db/models/enrichment_job.js](db/models/enrichment_job.js)
+
+---
+
+## Data model (summary)
+- **discovery_job:** A resumable Serper query with context (district/category) and state.
+- **raw_evidence:** Immutable JSONB of provider response; indexed by `discovery_job_id`.
+- **enrichment_job:** A deduplicated place handoff with lifecycle (`pending`, `exported`, `completed`).
+
+---
+
+## Getting started
+
+### Prerequisites
+- Node.js (v18+ recommended)
+- PostgreSQL accessible from `DATABASE_URL`
+- Serper API key (set `SERPER_API_KEY`)
+
+### Install
+
+```bash
+git clone <repo>
+cd hogona-crawl
+npm install
 ```
 
-Before running `node index.js`, configure the database variables described in
-[Configuration](#configuration) and enable PostGIS.
-
-## Architecture
-
-The flow diagram describes the intended processing pipeline from source
-collection to final place records.
-
-![Discovery workflow](docs/images/discovery-flow.png)
-
-The current repository implements the acquisition and persistence foundation:
-job models, finite batchers, provider adapters, a Crawl4AI worker, evidence
-storage, link filtering, and link ranking. The extraction, clustering, and
-enrichment tables are present in the data model, but their worker
-implementations are not part of this repository yet.
-
-![Database schema](docs/images/database-schema.png)
-
-## Responsibilities and boundaries
-
-The project is intentionally split by responsibility. Each layer has one
-reason to change, which keeps browser concerns, provider quirks, and database
-rules from leaking into one another.
-
-| Area | Owns | Does not own | Why this boundary exists |
-| --- | --- | --- | --- |
-| `db/models/` | Sequelize schema, relations, and model-level data validation | HTTP requests, browser execution, queue processing | Database rules remain reusable regardless of how a job was started. |
-| `services/discovery/processingServices.js/` | Provider-specific request parameters and responses | Crawling, persistence, ranking, extraction | Wikipedia and Geoapify can change independently without affecting the crawler. |
-| `services/discovery/RawEvidenceservice.js` | Content serialization, SHA-256 hashing, deduplication, and evidence creation | Choosing URLs or interpreting tourism data | Evidence is a durable audit record, not a crawl controller. |
-| `services/crawlerPython/src/crawlerProcessing.py` | Browser-backed page retrieval and JSON output | Node.js database access and job status changes | Crawl4AI stays in the Python runtime it needs, while the database remains owned by Node.js. |
-| `services/crawlerPython/crawlerJs/processing/` | Starting the Python worker and parsing its result | Browser logic or content extraction | Node.js gets a stable JavaScript interface without reimplementing the crawler. |
-| `services/crawlerPython/crawlerJs/filter/` and `ranker/` | Link rejection and priority scoring | Fetching links or changing job state | Link-selection rules can evolve without changing the crawler transport. |
-
-### Why Node.js and Python are separate
-
-Node.js already owns this project's Sequelize models, PostgreSQL connection,
-job records, and provider clients. Crawl4AI is a Python browser-crawling
-library, so the crawler runs in a small Python environment under
-`services/crawlerPython/.venv/`. Node.js invokes it as a subprocess and receives JSON on
-standard output.
-
-This avoids duplicating database code in Python and avoids making the Node.js
-application depend on browser automation internals. The trade-off is process
-startup cost and a strict JSON boundary: a crawler failure must be surfaced to
-Node.js, and only serializable data can cross the boundary. The wrapper handles
-that by rejecting empty output and adding the URL to any error it throws.
-
-## Data model and invariants
-
-| Model | Purpose | Important rules |
-| --- | --- | --- |
-| `crawl_job` | Queues a URL for crawling | Status is `pending`, `running`, `completed`, or `failed`; higher `priority` values are selected first. |
-| `discovery_job` | Stores a provider and provider-specific configuration | Status uses the same lifecycle as a crawl job; `config` is JSONB. |
-| `raw_evidence` | Stores raw page or provider content | `content_hash` is unique; model validation requires exactly one parent: a crawl job or a discovery job. |
-| `gemma_extraction` | Stores a place candidate extracted from one evidence record | Holds categories, coordinates, confidence, structured extraction data, and `EXTRACTED` or `REVIEW` status. |
-| `canidate_cluster` | Represents a proposed group of duplicate place candidates | Uses `PENDING`, `READY`, and `COMPLETED` status. The existing table name is intentionally preserved for database compatibility. |
-| `cluster_members` | Associates an extraction with a candidate cluster | Stores the extraction-to-cluster match score. |
-
-The model-level "exactly one parent job" validation protects calls made through
-Sequelize. Direct SQL writes must respect the same rule; there is no database
-`CHECK` constraint or migration in this repository that enforces it outside the
-application.
-
-## How work moves through the system
-
-### Crawl path
-
-1. Application code creates a `crawl_job` with a source URL and optional
-   priority.
-2. `CrawlJobService.getPendingCrawlJobs()` selects pending jobs ordered by
-   priority.
-3. `CrawlService.crawl(url)` launches `crawlerProcessing.py` using the Python
-   executable inside `services/crawlerPython/.venv/`.
-4. Crawl4AI returns one document containing the page's Markdown content and a
-   list of internal links.
-5. `CrawlFilter` rejects utility pages such as privacy, terms, login, and
-   support pages. `CrawlPriority` scores the remaining links using URL and
-   anchor-text travel keywords.
-6. `RawEvidenceService.createRawEvidence()` serializes content when necessary,
-   hashes it with SHA-256, returns an existing duplicate when found, or creates
-   a new `raw_evidence` row.
-
-### Discovery path
-
-1. Application code creates a `discovery_job` with a `source` and `config`.
-2. A provider adapter uses that configuration to make its request.
-3. The provider response is retained as source material and can be passed to
-   `RawEvidenceService` with the discovery job ID.
-
-The adapters deliberately keep provider payloads close to their original form.
-Wikipedia returns page content with its source URL; Geoapify returns GeoJSON
-features. This preserves provenance and keeps the acquisition layer from
-prematurely inventing a single place schema. Normalizing those payloads belongs
-to the extraction/enrichment stage.
-
-### Job state transitions
-
-Both job models use the same lifecycle:
-
-```text
-pending -> running -> completed
-                   -> failed
-```
-
-`index.js` starts both batchers after database synchronization. Each batcher
-drains pending jobs in bounded parallel batches, marks each job `running`, and
-records `completed` or `failed` after its processor returns. Retry policy and
-database-level job claiming are still application concerns.
-
-## Configuration
-
-Create `.env` in the repository root. It is excluded from version control.
-
-### PostgreSQL
-
-Use one connection string:
+### Configure
+Copy `.env.example` to `.env` and set:
 
 ```env
 DATABASE_URL=postgres://user:password@localhost:5432/hogona_crawl
+SERPER_API_KEY=your_serper_api_key
 ```
 
-or provide the individual values used by `db/database.js`:
+### Run pipeline stages
 
-```env
-DB_NAME=hogona_crawl
-DB_USER=postgres
-DB_PASSWORD=your_password
-DB_HOST=localhost
+- Discover (collect Serper Places evidence):
+
+```bash
+npm run discover
 ```
 
-PostGIS is required because `gemma_extraction.co_ordinates` is stored as a
-PostgreSQL `GEOMETRY(POINT, 4326)` value:
+- Create deduplicated enrichment jobs:
 
-```sql
-CREATE EXTENSION IF NOT EXISTS postgis;
+```bash
+npm run queue
 ```
 
-### Geoapify
+- Export a batch (1–10) for manual/LLM enrichment:
 
-Set the current variable name:
-
-```env
-GEOAPIFY_API_KEY=your_geoapify_key
+```bash
+npm run export -- 3
 ```
 
-For compatibility with existing local setups, the Geoapify adapter also reads
-`GEOMAPIFY_API_KEY` when `GEOAPIFY_API_KEY` is absent. New configuration should
-use `GEOAPIFY_API_KEY`.
+- Import validated results (point to the JSON file):
 
-## Installation
-
-### Requirements
-
-- Node.js 18 or later
-- Python 3.13 for the crawler virtual environment
-- PostgreSQL with PostGIS enabled
-- A Geoapify API key only when using the Geoapify discovery adapter
-
-### Node.js dependencies
-
-```powershell
-npm.cmd install
+```bash
+npm run import -- tmp/manual-enrichment/results.json
 ```
 
-`npm.cmd` is used in the examples because some Windows PowerShell setups block
-the `npm.ps1` shim through execution policy. On systems without that policy,
-`npm install` is equivalent.
+---
 
-### Python crawler environment
+## Configuration
+- **DATABASE_URL:** PostgreSQL connection string (required)
+- **SERPER_API_KEY:** Serper Places API key (required)
 
-```powershell
-py -3.13 -m venv .\services\crawlerPython\.venv
-.\services\crawlerPython\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\services\crawlerPython\.venv\Scripts\python.exe -m pip install -r .\services\crawlerPython\requirements.txt
-.\services\crawlerPython\.venv\Scripts\crawl4ai-setup.exe
-```
+All other runtime options are driven by per-job `config` objects stored in `discovery_job` rows.
 
-`crawl4ai-setup.exe` downloads the browser runtime used by Crawl4AI. The
-virtual environment belongs only to `services/crawlerPython/`; it does not turn the
-Node.js project into a Python project and it is ignored by Git.
-
-### Initialize the database
-
-```powershell
-node index.js
-```
-
-This authenticates to PostgreSQL and calls `sequelize.sync()`. Use it only
-against a database where automatic schema synchronization is acceptable.
-Production schema changes should be introduced through migrations before this
-project is connected to a shared database.
-
-## Using the crawler from Node.js
-
-The Python worker can be called directly for debugging:
-
-```powershell
-.\services\crawlerPython\.venv\Scripts\python.exe .\services\crawlerPython\src\crawlerProcessing.py --url https://example.com
-```
-
-It writes a single JSON object to standard output:
-
-```json
-{
-  "documents": "# Example Domain\\n...",
-  "links": [
-    {
-      "url": "https://example.com/another-page",
-      "text": "Another page"
-    }
-  ]
-}
-```
-
-Application code should use the Node.js wrapper instead of spawning Python
-itself:
-
-```js
-import CrawlService from "./services/crawlerPython/crawlerJs/processing/CrawlerService.js";
-
-const result = await CrawlService.crawl("https://example.com");
-console.log(result.documents);
-```
-
-The worker accepts only absolute `http` or `https` URLs. Invalid URLs are
-rejected before the browser starts.
-
-### Composing a crawl and evidence write
-
-The batchers compose these services when `index.js` runs. The following is the
-equivalent manual composition, useful when integrating the pipeline into a
-different application entry point:
-
-```js
-import CrawlJobService from "./services/crawlerPython/crawlerJs/crawlJobService.js";
-import CrawlService from "./services/crawlerPython/crawlerJs/processing/CrawlerService.js";
-import RawEvidenceService from "./services/discovery/RawEvidenceservice.js";
-
-const crawlJob = await CrawlJobService.createCrawlJob({
-  sourceUrl: "https://example.com",
-  priority: 10,
-});
-
-await CrawlJobService.updateStatus({ Job: crawlJob, status: "running" });
-
-try {
-  const { documents } = await CrawlService.crawl(crawlJob.source_url);
-  await RawEvidenceService.createRawEvidence({
-    crawlJobId: crawlJob.id,
-    sourceUrl: crawlJob.source_url,
-    content: documents,
-  });
-
-  await CrawlJobService.updateStatus({ Job: crawlJob, status: "completed" });
-} catch (error) {
-  await CrawlJobService.updateStatus({ Job: crawlJob, status: "failed" });
-  throw error;
-}
-```
-
-This explicit composition makes retries, concurrency control, rate limiting,
-and observability policy decisions visible to the application that owns them.
-
-## Provider discovery
-
-### Wikipedia
-
-`wikipediaService.getDocuments(discoveryJob)` expects a `config.query` value.
-It searches Wikipedia and returns matching page data, including the canonical
-page URL where Wikipedia supplies it.
-
-```js
-const discoveryJob = {
-  config: { query: "waterfalls in Kerala" },
-};
-```
-
-### Geoapify
-
-`geMapifyService.getDocuments(discoveryJob)` expects a Geoapify `placeId` and
-at least one category. It rejects invalid configuration or a missing API key
-before it makes a network request.
-
-```js
-const discoveryJob = {
-  config: {
-    placeId: "country:in",
-    categories: ["tourism.attraction"],
-  },
-};
-```
+---
 
 ## Testing
 
-Run the Node.js utility tests:
+Run unit tests (they avoid network/DB by design):
 
-```powershell
-npm.cmd test
+```bash
+npm test
 ```
 
-The current test suite covers link blacklisting, text normalization, and link
-priority scoring. A live crawler smoke test needs the prepared Python
-environment, Crawl4AI browser runtime, and network access.
+---
 
-## Operational notes
+## Failure handling & safety
+- External requests use timeouts and bubble HTTP errors.
+- Discovery is resumable: completed `discovery_job` entries are skipped.
+- Import validates schema and requires HTTP(S) citations for non-null claims before any DB write.
 
-- **Content deduplication is global.** Two jobs that produce identical content
-  return the same `raw_evidence` row because `content_hash` is unique. This
-  reduces reprocessing, but it also means source-specific duplicate tracking
-  belongs in a later design if it is required.
-- **The crawler starts a browser process.** It is more capable than a basic
-  HTTP request client, but it has higher startup and memory cost. Process jobs
-  in batches or keep a worker alive when throughput becomes important.
-- **No retry policy is built in.** Job status can be marked `failed`, but retry
-  count, backoff, and ownership/locking should be added by the scheduling
-  application.
-- **`sequelize.sync()` is a bootstrap tool.** It is convenient during local
-  development; migrations are the safer production mechanism.
+---
 
-## Repository layout
+## Limitations
+- Single discovery provider (Serper Places) — introduces provider bias.
+- Not intended for high-frequency production updates — used for curated enrichment.
 
-```text
-hogona-crawl/
-├── db/
-│   ├── database.js                         PostgreSQL connection setup
-│   └── models/                             schema definitions and relations
-├── services/
-│   ├── discovery/
-│   │   ├── DiscoveryJobService.js           discovery-job persistence service
-│   │   ├── RawEvidenceservice.js            hash, deduplicate, and store evidence
-│   │   └── processingServices.js/
-│   │       ├── wikipediaService.js          Wikipedia adapter
-│   │       └── geoApifyService.js           Geoapify adapter
-│   └── crawlerPython/
-│       ├── .venv/                           local Python environment, ignored
-│       ├── requirements.txt                 Crawl4AI dependency list
-│       ├── src/crawlerProcessing.py         browser crawler and JSON CLI
-│       └── crawlerJs/
-│           ├── crawlJobService.js           crawl-job persistence service
-│           ├── processing/CrawlerService.js Node-to-Python subprocess wrapper
-│           ├── filter/crawlFilter.js        low-value URL filter
-│           └── ranker/                      text normalization and URL scoring
-├── docs/images/                            pipeline and schema diagrams
-├── test/                                   Node.js utility tests
-└── index.js                                database bootstrap entry point
-```
+---
+
+## Future improvements
+- Add optional parallel discovery with rate limiting and retry backoff.
+- Add automated integration tests against a local Postgres fixture.
+
+---
+
+## Key engineering decisions & trade-offs
+
+- **Focused single-provider discovery (Serper Places)**
+	- Decision: keep Serper Places as the sole discovery adapter on this branch.
+	- Context: the `main` branch contained an earlier, multi-source pipeline that produced low-quality "junk" results and high maintenance cost; this branch intentionally narrows scope to improve signal and auditability.
+	- Alternatives considered: (a) keep the multi-source pipeline and add complex filtering, (b) blend multiple vetted providers with consensus scoring.
+	- Why chosen: single-provider approach reduces noise, simplifies parsing/validation, and makes manual enrichment tractable.
+	- Trade-off: provider bias and a single point of failure; some valid places might be missed unless additional sources are reintroduced later.
+
+- **Immutable raw evidence storage**
+	- Decision: persist raw provider JSON in `raw_evidence` (JSONB) and never overwrite.
+	- Why: reproducibility, audit trail, and ability to re-run different parsing/enrichment logic later.
+	- Trade-off: increased storage and the need to manage retention or archival policies.
+
+- **Manual/LLM-assisted enrichment (export/import) rather than fully automated ingestion**
+	- Decision: export small, human-reviewable batches for LLM and manual operators; import only validated, citation-backed results.
+	- Why: prevents automated poisoning of production place records and enforces citation requirements.
+	- Trade-off: slower throughput and human/operator effort required, but much stronger data quality guarantees.
+
+---
+
+## Progress & Next Steps — Google Drive export/import (in progress)
+
+Goal: automate the export of enrichment packets to Google Drive where an LLM operator (or automated LLM workflow you control) performs enrichment, then import results back into the database after validation.
+
+Minimal implementation plan (safe, incremental):
+
+1. Add an export module: `services/export/googleDriveExport.js` that creates the JSON batch and uploads it to a configured Drive folder.
+	 - Use `googleapis` (Drive v3) and either a service account with a shared drive folder or an OAuth2 client for human accounts.
+	 - Required env vars: `GOOGLE_CLIENT_EMAIL`, `GOOGLE_PRIVATE_KEY`, `GOOGLE_DRIVE_FOLDER_ID` (or OAuth client secrets).
+	 - Persist the exported file metadata (`fileId`, `sha256`, `exported_at`) on the `enrichment_job` rows to track provenance.
+
+2. Decide how results are returned:
+	 - Simple: operator downloads the file, runs LLM enrichment locally, then uses the existing `npm run import` to push results back.
+	 - Automated: LLM writes a result file to the same Drive folder; the pipeline either (a) polls for a `results-<batch>.json` file or (b) receives a Drive push notification/webhook (requires a public HTTPS endpoint) and then runs the import flow.
+
+3. Import safety: validate JSON schema, check `sha256`/checksum, ensure `enrichment_job` rows are still `exported`, verify HTTP(S) citations, then atomically write results and mark jobs `completed` or `needs_review`.
+
+Security and operational notes:
+- OAuth/service-account keys must be stored in environment variables and never committed. Use short-lived access where possible.
+- Prefer a service account + shared drive for server-side automation to avoid interactive OAuth flows.
+- Consider using signed URLs on S3 or a private Drive folder if you need to avoid Drive webhooks.
+
+Alternatives and trade-offs:
+- Drive webhook automation is robust but requires hosting a public webhook and handling auth; polling is simpler but less real-time.
+- Using cloud storage (S3/GCS) with presigned URLs is easier for server-only pipelines and can simplify permissions.
+
+Would you like me to implement the `googleDriveExport` module (upload + metadata tracking) next, or prepare an automated import webhook skeleton? I can start either one and include tests and example env setup.
+
+
+## Contributing
+- Fork, branch, test, and open a PR. See code in [scripts/](scripts/) and [services/](services/).
+
+---
 
 ## License
+MIT
 
-ISC, as declared in `package.json`.
+---
+
+Author: melwin
+

@@ -7,15 +7,17 @@
   "type": "module",
   "main": "index.js",
   "scripts": {
+    "discover": "node scripts/collectSerperKarnataka.js",
+    "queue": "node scripts/queueSerperPlacesForManualEnrichment.js",
+    "export": "node scripts/exportManualEnrichmentBatch.js",
+    "import": "node scripts/importManualEnrichmentResults.js",
     "test": "node --test"
   },
   "dependencies": {
     "axios": "^1.18.1",
     "dotenv": "^17.4.2",
-    "natural": "^8.1.1",
     "pg": "^8.22.0",
     "pg-hstore": "^2.3.4",
-    "python-shell": "^5.0.0",
     "sequelize": "^6.37.8"
   }
 }
