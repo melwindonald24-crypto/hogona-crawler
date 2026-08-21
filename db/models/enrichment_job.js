@@ -38,6 +38,10 @@ const enrichment_job = sequelize.define("enrichment_job", {
         type: DataTypes.JSONB,
         allowNull: true,
     },
+    batch_id: {
+        type: DataTypes.STRING,
+        allowNull: true,
+    },
     status: {
         type: DataTypes.ENUM("pending", "exported", "completed", "failed"),
         allowNull: false,
@@ -47,6 +51,7 @@ const enrichment_job = sequelize.define("enrichment_job", {
     tableName: "enrichment_job",
     timestamps: true,
     underscored: true,
+    indexes: [{ fields: ["batch_id"] }],
 });
 
 export default enrichment_job;

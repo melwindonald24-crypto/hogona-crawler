@@ -1,39 +1,33 @@
 import crypto from "node:crypto";
 
-//takes the contents from raw evidence and parses it for further enrichment
-export function parseSerperResponse(content) {
-    const response = typeof content === "string" ? JSON.parse(content) : content;
-    return Array.isArray(response?.places) ? response.places : [];
-}
+export const TRAVERSABILITY_VALUES = ["easy", "moderate", "difficult"];
+export const NARRATIVE_PLACE_FIELDS = [
+  "micro_region",
+  "vibe",
+  "summary",
+  "best_time",
+];
+export const PLANNING_ATTRIBUTE_FIELDS = [
+  "description",
+  "elevation_or_height",
+  "legend_or_history",
+  "how_to_reach",
+  "access_restrictions",
+  "safety_notes",
+  "local_name_variants",
+  "notes",
+];
 
+export function parseSerperResponse(content) {
+  const response = typeof content === "string" ? JSON.parse(content) : content;
+  return Array.isArray(response?.places) ? response.places : [];
+}
 
 export function sourcePlaceId(place) {
-    if (place.placeId) return `place:${place.placeId}`;
-    if (place.cid) return `cid:${place.cid}`;
-
-    return `hash:${crypto.createHash("sha256").update(JSON.stringify(place)).digest("hex")}`;
+  if (place.placeId) return `place:${place.placeId}`;
+  if (place.cid) return `cid:${place.cid}`;
+  return `hash:${crypto.createHash("sha256").update(JSON.stringify(place)).digest("hex")}`;
 }
-
-
-//enum
-export const TRAVERSABILITY_VALUES = ["easy", "moderate", "difficult"];
-
-
-export const NARRATIVE_PLACE_FIELDS = ["micro_region", "vibe", "summary", "best_time","co_ords"];
-
-
-export const ESTIMATE_PLACE_FIELDS = ["traversability", "visit_duration_minutes"];
-
-
-export const PLANNING_ATTRIBUTE_FIELDS = [
-    "description",
-    "elevation_or_height",
-    "legend_or_history",
-    "how_to_reach",
-    "access_restrictions",
-    "safety_notes",
-    "notes",
-];
 
 const EXAMPLE_FILLED = {
     job_id: "example-uuid-1",
@@ -91,10 +85,13 @@ const EXAMPLE_EMPTY = {
     sources: [],
 };
 
-export function chatGptPacket(jobs) {
+export function buildBatchPayload(jobs, batchId) {
     return {
+        batch_id: batchId,
+        status: "pending",
         instructions: [
             "You are filling in real data fields for GPS-confirmed tourist places in Karnataka, India, for a travel app's database. Every field either gets shown to a traveler directly or read by an AI writing their itinerary — accuracy matters more than completeness.",
+            "RULE 0-if you find the place irrelevant like a random park or a random place that is not a tourist place, then you can skip it and leave all fields null. This is not a failure case.",
             "RULE 1 — Cite or leave null. Use web search for every fact. If you can't find a reliable source for a field, set it to null. Never fill a null with a plausible-sounding guess. For obscure places, most fields being null is the normal, correct outcome, not a failure.",
             "RULE 2 — Report disagreement, don't resolve it silently. If sources give different numbers for the same fact (e.g. two different heights for one waterfall), don't pick one or average — state both and which source said what.",
             "RULE 3 — Every filled narrative field needs a source behind it. If \"sources\" is empty, every narrative field listed below must be null.",
@@ -127,55 +124,83 @@ export function chatGptPacket(jobs) {
 }
 
 
-export function validateImportedResults(value) {
+function isFilled(value) {
+  return typeof value === "string"
+    ? value.trim() !== ""
+    : Array.isArray(value) && value.length > 0;
+}
 
-    if (!Array.isArray(value)) {
-        throw new Error("The ChatGPT result file must contain a JSON array.");
-    }
+function hasSourceForField(sources, fieldName) {
+  return (
+    Array.isArray(sources) &&
+    sources.some((source) => {
+      try {
+        const url = new URL(source?.url);
+        return (
+          ["http:", "https:"].includes(url.protocol) &&
+          Array.isArray(source.supports) &&
+          source.supports.includes(fieldName)
+        );
+      } catch {
+        return false;
+      }
+    })
+  );
+}
 
-    for (const result of value) {
-        if (
-            !result ||
-            typeof result.job_id !== "string" ||
-            !result.place_fields ||
-            typeof result.place_fields !== "object" ||
-            !result.planning_attributes ||
-            typeof result.planning_attributes !== "object"
-        ) {
-            throw new Error("Every result requires job_id, place_fields, and planning_attributes.");
-        }
+export function validateCompletedBatch(batch) {
+  if (!batch || typeof batch !== "object" || Array.isArray(batch))
+    throw new Error("The result file must contain a JSON object.");
+  if (typeof batch.batch_id !== "string" || !batch.batch_id.trim())
+    throw new Error("Result is missing batch_id.");
+  if (batch.status !== "completed")
+    throw new Error('Result status must be "completed".');
+  if (!Array.isArray(batch.places) || batch.places.length === 0)
+    throw new Error("Result must contain at least one place.");
 
-        const { place_fields, planning_attributes, sources } = result;
+  const jobIds = new Set();
+  for (const result of batch.places) {
+    if (
+      !result ||
+      typeof result.job_id !== "string" ||
+      !result.place_fields ||
+      !result.planning_attributes
+    )
+      throw new Error(
+        "Every place requires job_id, place_fields, and planning_attributes.",
+      );
+    if (jobIds.has(result.job_id))
+      throw new Error(`Duplicate job_id in result: ${result.job_id}.`);
+    jobIds.add(result.job_id);
 
-        if (!TRAVERSABILITY_VALUES.includes(place_fields.traversability)) {
-            throw new Error(
-                `Result for ${result.job_id} has traversability "${place_fields.traversability}" — must be exactly one of ${TRAVERSABILITY_VALUES.join(", ")}.`,
-            );
-        }
+    const { place_fields, planning_attributes, sources } = result;
+    if (!TRAVERSABILITY_VALUES.includes(place_fields.traversability))
+      throw new Error(
+        `Result for ${result.job_id} has invalid traversability.`,
+      );
+    if (
+      !Number.isInteger(place_fields.visit_duration_minutes) ||
+      place_fields.visit_duration_minutes <= 0
+    )
+      throw new Error(
+        `Result for ${result.job_id} needs a positive whole visit_duration_minutes.`,
+      );
+    if ("confidence" in result)
+      throw new Error(`Result for ${result.job_id} must not set confidence.`);
+    for (const field of NARRATIVE_PLACE_FIELDS)
+      if (isFilled(place_fields[field]) && !hasSourceForField(sources, field))
+        throw new Error(
+          `Result for ${result.job_id} has "${field}" filled without a supporting source.`,
+        );
 
-        if (!Number.isInteger(place_fields.visit_duration_minutes) || place_fields.visit_duration_minutes <= 0) {
-            throw new Error(
-                `Result for ${result.job_id} needs visit_duration_minutes as a positive whole number — itinerary time math depends on it directly.`,
-            );
-        }
-
-        if ("confidence" in result && result.confidence !== "needs_review") {
-            throw new Error(
-                `Result for ${result.job_id} sets confidence itself — that tier is assigned by the import step, never by the enrichment pass.`,
-            );
-        }
-
-        const narrativeFieldsFilled = [
-            ...PLANNING_ATTRIBUTE_FIELDS.map((field) => planning_attributes[field]),
-            ...NARRATIVE_PLACE_FIELDS.map((field) => place_fields[field]),
-        ].some((fieldValue) => typeof fieldValue === "string" && fieldValue.trim() !== "");
-
-        if (narrativeFieldsFilled && (!Array.isArray(sources) || sources.length === 0)) {
-            throw new Error(
-                `Result for ${result.job_id} has narrative content but no sources. Every non-null fact needs at least one source URL — reject or re-run this row rather than accept it unsourced.`,
-            );
-        }
-    }
-
-    return value;
+    for (const field of PLANNING_ATTRIBUTE_FIELDS)
+      if (
+        isFilled(planning_attributes[field]) &&
+        !hasSourceForField(sources, field)
+      )
+        throw new Error(
+          `Result for ${result.job_id} has "${field}" filled without a supporting source.`,
+        );
+  }
+  return batch;
 }

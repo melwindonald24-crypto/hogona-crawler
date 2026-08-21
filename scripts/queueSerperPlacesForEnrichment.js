@@ -1,21 +1,20 @@
 import "dotenv/config";
-
 import sequelize from "../db/database.js";
-import discovery_job from "../db/models/discovery_job.js";
-import raw_evidence from "../db/models/raw_evidence.js";
-import enrichment_job from "../db/models/enrichment_job.js";
-import { parseSerperResponse, sourcePlaceId } from "../services/enrichment/manualEnrichment.js";
+import { ensureEnrichmentJobSchema } from "../db/ensureEnrichmentJobSchemaMigration.js";
+import discoveryJob from "../db/models/discovery_job.js";
+import rawEvidence from "../db/models/raw_evidence.js";
+import enrichmentJob from "../db/models/enrichment_job.js";
+import { parseSerperResponse, sourcePlaceId } from "../services/enrichment/enrichmentContract.js";
 
 async function main() {
     await sequelize.authenticate();
-    await enrichment_job.sync();
+    await ensureEnrichmentJobSchema();
 
-    const serperJobs = await discovery_job.findAll({
+    const serperJobs = await discoveryJob.findAll({
         where: { source: "serper", status: "completed" },
         attributes: ["id", "config"],
     });
-
-    const evidence = await raw_evidence.findAll({
+    const evidence = await rawEvidence.findAll({
         where: { discovery_job_id: serperJobs.map((job) => job.id) },
         attributes: ["id", "discovery_job_id", "content"],
     });
@@ -31,16 +30,15 @@ async function main() {
             console.warn(`Skipped invalid JSON raw_evidence ${row.id}.`);
             continue;
         }
-
         for (const place of places) {
             const placeName = place.title ?? place.name;
             if (!placeName) {
                 console.warn(`Skipped unnamed Serper result in raw_evidence ${row.id}.`);
                 continue;
             }
-
-            const [, wasCreated] = await enrichment_job.findOrCreate({
-                where: { source_place_id: sourcePlaceId(place) },
+            const [, wasCreated] = await enrichmentJob.findOrCreate({
+                where: { source_place_id: sourcePlaceId(place) 
+                },
                 defaults: {
                     raw_evidence_id: row.id,
                     source_place_id: sourcePlaceId(place),
@@ -53,15 +51,9 @@ async function main() {
             if (wasCreated) created += 1;
         }
     }
-
-    console.log(`Queued ${created} new places for manual enrichment.`);
+    console.log(`Queued ${created} new places for Drive enrichment.`);
 }
 
 main()
-    .catch((error) => {
-        console.error(`Queueing failed: ${error.message}`);
-        process.exitCode = 1;
-    })
-    .finally(async () => {
-        await sequelize.close();
-    });
+    .catch((error) => { console.error(`Queueing failed: ${error.message}`); process.exitCode = 1; })
+    .finally(() => sequelize.close());

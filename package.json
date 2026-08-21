@@ -8,9 +8,9 @@
   "main": "index.js",
   "scripts": {
     "discover": "node scripts/collectSerperKarnataka.js",
-    "queue": "node scripts/queueSerperPlacesForManualEnrichment.js",
-    "export": "node scripts/exportManualEnrichmentBatch.js",
-    "import": "node scripts/importManualEnrichmentResults.js",
+    "queue": "node scripts/queueSerperPlacesForEnrichment.js",
+    "export": "node scripts/exportEnrichmentBatch.js",
+    "import": "node scripts/importEnrichmentBatches.js",
     "test": "node --test"
   },
   "dependencies": {
